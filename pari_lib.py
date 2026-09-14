@@ -145,9 +145,10 @@ from functools import lru_cache as _lru2
 
 
 @_lru2(maxsize=None)
-def _set_prob(a, b, srv, h1, h2):
+def _set_prob(a, b, srv, h1, h2, first1=None, first2=None):
     """P(1-й выиграет сет) при счёте a-b, подача srv (1/2).
-    h1/h2 — P(холда) каждого. Тай-брейк 6-6: 50/50 со сдвигом силы подачи."""
+    h1/h2 — P(холда) каждого. first1/first2 — холды ТОЛЬКО текущего гейма
+    (условные, напр. после ровно); дальше базовые."""
     if (a == 6 and b <= 4) or (a == 7):
         return 1.0
     if (b == 6 and a <= 4) or (b == 7):
@@ -282,7 +283,7 @@ def sim_match(h1, h2, sets_won=(0, 0), cur=None, server=1, game_pts=None,
     return {"n": n, "p1": wins / n,
             "total": tot_games, "margin": margins,
             "p3sets": set3 / n,
-            "exact": {k: v / n for k, v in sorted(exact.items(), key=lambda x: -x[1])[:6]}}
+            "exact": {k: v / n for k, v in exact.items()}}
 
 
 # ---------------- Точный счёт гейма и тотал очков ----------------
@@ -322,3 +323,39 @@ def game_total_dist(p):
     # 4-2 = 6 очков (не >6.5), ровно = 8+ очков (всегда >6.5)
     return {"over4.5": 1 - p4, "over5.5": 1 - p4 - p5,
             "over6.5": pdeuce}
+
+
+# ---------------- Условные холды из майнинга правил ----------------
+# Замер 14.09: после гейма через ровно холд падает (65% vs 74% базы, n=97).
+# Остальные условия ≈ база (геймы почти независимы). Словарь пополняется
+# пересчётом pari_rules.py; None = данных нет, брать базу.
+COND_HOLD = {
+    "prev_deuce": 0.65,
+}
+
+
+def cond_hold_adj(base_hold, flags):
+    """Скорректированный холд по флагам контекста. flags: dict."""
+    h = base_hold
+    if flags.get("prev_deuce") and COND_HOLD.get("prev_deuce"):
+        # смешиваем замер с базой 50/50 пока выборка <200 (осторожность)
+        h = 0.5 * h + 0.5 * COND_HOLD["prev_deuce"]
+    return h
+
+
+# ---------------- Точные счета: fair из симуляции ----------------
+def exact_fairs(h1, h2, sets_won=(0, 0), cur=None, server=1,
+                p1=None, p2=None, game_pts=None, n=5000, seed=11):
+    """Честные вероятности: точный счёт ТЕКУЩЕГО сета + точный счёт матча.
+    Возвращает {'set': {(a,b): p}, 'match': {(s1,s2): p}}."""
+    from collections import Counter
+    r = sim_match(h1, h2, sets_won, cur, server, game_pts, p1, p2, n, seed)
+    set_c, match_c = Counter(), Counter()
+    for tup, p in r["exact"].items():
+        if tup:
+            set_c[tup[0]] += p
+            s1 = sum(1 for s in tup if s[0] > s[1])
+            s2 = sum(1 for s in tup if s[1] > s[0])
+            match_c[(s1, s2)] += p
+    return {"set": dict(sorted(set_c.items(), key=lambda x: -x[1])),
+            "match": dict(sorted(match_c.items(), key=lambda x: -x[1]))}

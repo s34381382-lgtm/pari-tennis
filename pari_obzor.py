@@ -252,6 +252,19 @@ def parse_odds(texts, ban=()):
                 and re.fullmatch(r"\d+\.\d+", t5 or "")):
             odds.setdefault(t0, {})[f"{t1} Б"] = t3
             odds[t0][f"{t1} М"] = t5
+    # точные счета вида Название-рынка, "2:0", 2.20, "0:2", – (битые пропускаем)
+    cur_title = None
+    for j, t in enumerate(texts):
+        if t in ("Точный счет", "Точный счёт", "Точный счет сета", "Точный счёт сета",
+                 "Счёт сета", "Счет сета"):
+            cur_title = t
+            continue
+        if cur_title and re.fullmatch(r"\d+:\d+", t or "") \
+                and j + 1 < len(texts) \
+                and re.fullmatch(r"\d+\.\d+", texts[j + 1] or ""):
+            odds.setdefault(cur_title, {})[t] = texts[j + 1]
+        if cur_title and t in ("Роспись", "Популярное", "Матч", "Победа в\u00a0матче"):
+            cur_title = None
     return odds
 
 

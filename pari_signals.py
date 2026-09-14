@@ -218,7 +218,7 @@ def main():
         state = {}
         eids = {str(m.get("eid")) for d in snaps for m in d.get("matches", [])}
         for eid in sorted(eids):
-            for s in check_match(eid, snaps[-40:], state):
+            for s in check_match(eid, snaps, state):
                 print(s, flush=True)
         return
     state = {}
