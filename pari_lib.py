@@ -131,27 +131,32 @@ def _set_prob(a, b, srv, h1, h2):
 
 def match_fair(sets_won, cur_games, next_srv, h1, h2, best_of=3):
     """Честная P(1-й выиграет матч). sets_won=(s1,s2), cur_games=(a,b) текущего
-    сета (или None), next_srv=1/2. Возвращает 0..1."""
+    сета (или None), next_srv=1/2. ВАЖНО: будущие сеты — нейтральной ps с 0-0,
+    иначе счёт 5-3 раздувает всё до 99% (баг 14.09, матч Пиккарт)."""
     need = 2 if best_of == 3 else 3
     s1, s2 = sets_won
     if s1 >= need:
         return 1.0
     if s2 >= need:
         return 0.0
+    ps_neutral = (_set_prob(0, 0, 1, h1, h2) + _set_prob(0, 0, 2, h1, h2)) / 2
     if cur_games is None:
-        ps = 0.5  # между сетами без счёта — грубо пополам с весом холдов
-        ps = 0.5 + 0.2 * (h1 - h2)
-        ps = max(0.05, min(0.95, ps))
+        ps = max(0.05, min(0.95, 0.5 + 0.2 * (h1 - h2)))
     else:
         a, b = cur_games
         ps = _set_prob(a, b, next_srv, h1, h2)
-    # разложение по исходам оставшихся сетов (BO3)
+    # разложение по исходам оставшихся сетов (BO3).
+    # ps_now — только ТЕКУЩИЙ сет; дальше всегда нейтральная ps_n.
+    p10 = ps_neutral + (1 - ps_neutral) * ps_neutral  # взять матч с 1-0
     if s1 == 1 and s2 == 0:
-        return ps + (1 - ps) * ps
+        return ps + (1 - ps) * ps_neutral
     if s1 == 0 and s2 == 1:
-        return ps * ps
+        return ps * ps_neutral
     if s1 == 0 and s2 == 0:
-        return ps * ps * (3 - 2 * ps)
+        if cur_games:
+            return ps * p10
+        return ps_neutral * ps_neutral * (3 - 2 * ps_neutral)
     if s1 == 1 and s2 == 1:
         return ps
+    return ps
     return ps
