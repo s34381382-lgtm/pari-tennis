@@ -230,6 +230,7 @@ def build_timelines(paths):
                         server = server_of(t, si, p["a"] + p["b"])
                         t["games"].append({
                             "set": si, "winner": winner, "server": server,
+                            "ab": (a, b),
                             "dbl": (d1 - p["d1"], d2 - p["d2"]),
                             "pts_end": tuple(p.get("pts") or ()), "ts": ts})
                     elif si == p["si"] + 1:
