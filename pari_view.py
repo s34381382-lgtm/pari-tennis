@@ -114,6 +114,8 @@ def merged_odds(snaps):
 def report_live(snaps):
     last = snaps[-1]
     evs = evs_of(last)
+    playing = [e for e in evs if e.get("sc")]
+    soon = [e for e in evs if not e.get("sc")]
     full = merged_odds(snaps)
     for e in evs:
         if e["eid"] in full and full[e["eid"]]:
@@ -122,12 +124,12 @@ def report_live(snaps):
                          for o in full[e["eid"]].values()}
             e["_rawodds"] = list(full[e["eid"]].values())
     t = datetime.fromtimestamp(last["ts"]).strftime("%H:%M:%S")
-    print(f"=== В ЭФИРЕ ({t}) — {len(evs)} матчей ===")
+    print(f"=== ИГРАЮТ ({t}) — {len(playing)} матчей ===")
     import sys as _s
     import os as _o
     _s.path.insert(0, _o.path.dirname(_o.path.abspath(__file__)))
     from pari_lib import game_fair, serve_point_prob, match_fair
-    for e in sorted(evs, key=lambda x: (x["tour"], str(x["p1"]))):
+    for e in sorted(playing, key=lambda x: (x["tour"], str(x["p1"]))):
         p1, p2 = win_odds(e)
         ko = f" {p1}-{p2}" if p1 else ""
         w, g, indoor = wind_for(e["tour"])
@@ -147,8 +149,8 @@ def report_live(snaps):
                 ss = e.get("sc")
                 cur_no = None
                 if isinstance(ss, list) and ss:
-                    last = ss[-1]
-                    cur_no = int(last[0]) + int(last[1]) + 1
+                    _lg = ss[-1]
+                    cur_no = int(_lg[0]) + int(_lg[1]) + 1
                 want = "%1" if side == "p1" else "%2"
                 for mk, v in e["odds"].items():
                     if "то выиграет гейм" in mk and want in mk \
@@ -228,6 +230,12 @@ def report_live(snaps):
         shown += 1
     if not shown:
         print(" (тишина)")
+    if soon:
+        print()
+        print(f"=== СКОРО (без счёта): {len(soon)} ===")
+        for e in sorted(soon, key=lambda x: x["tour"])[:12]:
+            nm = f"{e['p1']} - {e['p2']}" if e["p1"] != "?" else f"id={e['eid']}"
+            print(f" [{e['tour'][:30]:30s}] {nm[:44]}")
 
 
 def report_match(snaps, eid):

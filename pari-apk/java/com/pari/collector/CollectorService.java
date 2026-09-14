@@ -421,10 +421,11 @@ public class CollectorService extends Service {
                 }
                 arr.put(m);
                 wasLive.add(eid);
-                // свежий: 0:0, <=1 сыгранного сета-гейма, имена есть
+                // свежий: ПЕРВЫЙ СЧЁТ в матче (имена + set_scores), 0:0, геймов <= 2
                 try {
                     if (e.optString("team1", "").length() < 2) continue;
                     JSONArray ss = m.optJSONArray("set_scores");
+                    if (ss == null || ss.length() == 0) continue;
                     JSONArray sets = m.optJSONArray("sets");
                     boolean zero = sets != null && "0".equals(sets.optString(0))
                             && "0".equals(sets.optString(1));
