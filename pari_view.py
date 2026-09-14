@@ -56,7 +56,8 @@ def evs_of(s):
             "p1": e.get("p1", "?") or "?", "p2": e.get("p2", "?") or "?",
             "tour": (e.get("tour") or e.get("cat") or "?")[:34],
             "sets": e.get("sets"), "sc": e.get("set_scores") or e.get("setscore"),
-            "game": e.get("game"),
+            "game": e.get("game"), "serve": e.get("serve"),
+            "stats": e.get("stats"),
             "odds": odds,
         })
     return out
@@ -119,8 +120,13 @@ def report_live(snaps):
             e["odds"] = {f"{o.get('m')} ({o.get('pt')})"
                          if o.get("pt") not in (None, "") else o.get("m", "?"): o.get("v")
                          for o in full[e["eid"]].values()}
+            e["_rawodds"] = list(full[e["eid"]].values())
     t = datetime.fromtimestamp(last["ts"]).strftime("%H:%M:%S")
     print(f"=== В ЭФИРЕ ({t}) — {len(evs)} матчей ===")
+    import sys as _s
+    import os as _o
+    _s.path.insert(0, _o.path.dirname(_o.path.abspath(__file__)))
+    from pari_lib import game_fair, serve_point_prob, match_fair
     for e in sorted(evs, key=lambda x: (x["tour"], str(x["p1"]))):
         p1, p2 = win_odds(e)
         ko = f" {p1}-{p2}" if p1 else ""
@@ -128,11 +134,71 @@ def report_live(snaps):
         if indoor:
             wx = " зал"
         elif w is None:
-            wx = ""
+            wx = " ~ветер?" if e["tour"] else ""
         else:
             wx = f" ветер {w:.0f}/{g:.0f}" + ("!!" if w >= 6 or g >= 9 else "")
+        # марковская цена текущего гейма vs кэф бука (только подающий)
+        mx = ""
+        try:
+            gm = e.get("game")
+            srv = str(e.get("serve") or "")
+            if gm and srv in ("1", "2") and e.get("odds"):
+                side = "p1" if srv == "1" else "p2"
+                ss = e.get("sc")
+                cur_no = None
+                if isinstance(ss, list) and ss:
+                    last = ss[-1]
+                    cur_no = int(last[0]) + int(last[1]) + 1
+                want = "%1" if side == "p1" else "%2"
+                for mk, v in e["odds"].items():
+                    if "то выиграет гейм" in mk and want in mk \
+                            and (cur_no is None or str(cur_no) in mk):
+                        p = serve_point_prob(e.get("stats"), e["tour"], side)
+                        fair = game_fair(p, tuple(gm))
+                        if fair and v:
+                            imp = 1 / v
+                            edge = fair - imp
+                            if edge > 0.12:
+                                mx = f" МОДЕЛЬ {side} {fair:.0%} vs {v} (+{edge:.0%})!"
+                            elif edge > 0.05:
+                                mx = f" модель {side} {fair:.0%} vs {v}"
+                        break
+        except Exception:
+            pass
+        # марковская цена МАТЧА vs кэфы 921/923
+        try:
+            o1 = o2 = None
+            for o in e.get("_rawodds", []):
+                if o.get("f") == 921:
+                    o1 = o.get("v")
+                elif o.get("f") == 923:
+                    o2 = o.get("v")
+            if o1 and o2 and e.get("sc"):
+                ss = e["sc"]
+                sw = [0, 0]
+                for g in ss[:-1]:
+                    a, b = int(g[0]), int(g[1])
+                    if (a == 6 and b <= 4) or (a, b) in ((7, 5), (7, 6)):
+                        sw[0] += 1
+                    elif (b == 6 and a <= 4) or (a, b) in ((5, 7), (6, 7)):
+                        sw[1] += 1
+                a, b = int(ss[-1][0]), int(ss[-1][1])
+                p1 = serve_point_prob(e.get("stats"), e["tour"], "p1")
+                p2 = serve_point_prob(e.get("stats"), e["tour"], "p2")
+                from pari_lib import game_fair as _gf
+                h1, h2 = _gf(p1, (0, 0)), _gf(p2, (0, 0))
+                srv = str(e.get("serve") or "")
+                if h1 and h2 and srv in ("1", "2"):
+                    fair1 = match_fair(tuple(sw), (a, b), int(srv), h1, h2)
+                    e1, e2 = fair1 - 1 / o1, (1 - fair1) - 1 / o2
+                    if e1 > 0.12:
+                        mx += f" МАТЧ П1 {fair1:.0%} vs {o1} (+{e1:.0%})!"
+                    elif e2 > 0.12:
+                        mx += f" МАТЧ П2 {1-fair1:.0%} vs {o2} (+{e2:.0%})!"
+        except Exception:
+            pass
         print(f" [{e['tour']:34s}] {e['p1']:22s} - {e['p2']:22s} "
-              f"{score_str(e):22s}{ko}{wx}")
+              f"{score_str(e):22s}{ko}{wx}{mx}")
     print()
     print("=== ДВИЖЕНИЕ (последние ~3 мин) ===")
     cutoff = last["ts"] - 200
@@ -202,12 +268,41 @@ GEO = {  # подстрока турнира -> (широта, долгота, �
     "Гвадалахара": (20.67, -103.35, False),
     "Сан-Паулу": (-23.55, -46.63, False),
     "Хургада": (27.25, 33.81, False),
+    "Hurghada": (27.25, 33.81, False),
     "Монастир": (35.76, 10.81, False),
+    "Monastir": (35.76, 10.81, False),
     "Таллахасси": (30.44, -84.28, False),
+    "Tallahassee": (30.44, -84.28, False),
     "Шарм": (27.91, 34.33, False),
     "Шымкент": (42.30, 69.59, False),
     "Анталья": (36.88, 30.70, False),
+    "Antalya": (36.88, 30.70, False),
     "Кайсери": (38.72, 35.48, False),
+    "Фантхьет": (10.93, 108.28, False),
+    "Фантхьет 4": (10.93, 108.28, False),
+    "Стамбул": (41.01, 28.98, False),
+    "Каир": (30.04, 31.24, False),
+    "Тунис": (36.80, 10.18, False),
+    "Доха": (25.29, 51.53, False),
+    "Дубай": (25.20, 55.27, False),
+    "Манама": (26.23, 50.59, False),
+    "Ташкент": (41.31, 69.24, False),
+    "Алматы": (43.24, 76.89, False),
+    "Астана": (51.16, 71.43, False),
+    "Тбилиси": (41.72, 44.79, False),
+    "Ереван": (40.18, 44.51, False),
+    "Баку": (40.41, 49.87, False),
+    "Мехико": (19.43, -99.13, False),
+    "Буэнос": (-34.60, -58.38, False),
+    "Сантьяго": (-33.45, -70.67, False),
+    "Лима": (-12.05, -77.04, False),
+    "Богота": (4.71, -74.07, False),
+    "Найроби": (-1.29, 36.82, False),
+    "Прага": (50.08, 14.44, False),
+    "Загреб": (45.82, 15.98, False),
+    "Белград": (44.79, 20.45, False),
+    "София": (42.70, 23.32, False),
+    "Бухарест": (44.43, 26.10, False),
 }
 WIND_CACHE = {}
 
