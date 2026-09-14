@@ -193,7 +193,6 @@ def match_fair(sets_won, cur_games, next_srv, h1, h2, best_of=3):
     if s1 == 1 and s2 == 1:
         return ps
     return ps
-    return ps
 
 
 # ---------------- Монте-Карло матча ----------------
