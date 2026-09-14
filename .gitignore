@@ -1,0 +1,10 @@
+*.jsonl
+*.gz
+*.log
+__pycache__/
+*.pyc
+build/
+*.keystore
+*.jks
+tmp/
+.dex/
