@@ -88,9 +88,42 @@ def base_point_prob(tour):
     return 0.63
 
 
-def serve_point_prob(stats, tour, server):
-    """p с учётом live-статы (эйсы/двойные), иначе база турнира."""
-    p = base_point_prob(tour)
+# Калибровка силы подачи по прематч-кэфу подающего (замер 14.09, ~200 геймов):
+# <1.4: 83%, 1.4-1.8: 81%, 1.8-2.5: 78%, 2.5-4: 77%, 4+: 48%
+SERVE_HOLD_CURVE = [(1.4, 0.83), (1.8, 0.81), (2.5, 0.78), (4.0, 0.77), (99.0, 0.48)]
+
+
+def hold_for_odds(o):
+    try:
+        o = float(o)
+    except (ValueError, TypeError):
+        return None
+    for bound, h in SERVE_HOLD_CURVE:
+        if o < bound:
+            return h
+    return SERVE_HOLD_CURVE[-1][1]
+
+
+def hold_to_p(H):
+    lo, hi = 0.45, 0.95
+    for _ in range(40):
+        mid = (lo + hi) / 2
+        if _pg(0, 0, mid) < H:
+            lo = mid
+        else:
+            hi = mid
+    return round((lo + hi) / 2, 3)
+
+
+def serve_point_prob(stats, tour, server, prem_odds=None):
+    """p: калибровка по прематч-кэфу подающего -> live-статка -> база тура."""
+    p = None
+    if prem_odds:
+        h = hold_for_odds(prem_odds)
+        if h:
+            p = hold_to_p(h)
+    if p is None:
+        p = base_point_prob(tour)
     if not stats:
         return p
     try:

@@ -367,8 +367,11 @@ def cmd_auto(files):
     import sys as _s2
     _s2.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     from pari_lib import game_fair, serve_point_prob, tour_circuit, CIRCUIT_STAKE
+    from pari_lib import match_fair as _mf
+    from pari_lib import game_fair as _gf
     m_added = m_settled = 0
     running = {}
+    first_win = {}
     for path in line_files:
         for line in open(path, encoding="utf-8"):
             line = line.strip()
@@ -383,6 +386,15 @@ def cmd_auto(files):
                 cur = running.setdefault(eid, {})
                 for o in m.get("odds", []):
                     cur[(o.get("f"), o.get("pt"))] = o
+                if eid not in first_win:
+                    o1 = o2 = None
+                    for o in m.get("odds", []):
+                        if o.get("f") == 921:
+                            o1 = o.get("v")
+                        elif o.get("f") == 923:
+                            o2 = o.get("v")
+                    if o1 and o2:
+                        first_win[eid] = (o1, o2)
                 # M: марковская цена МАТЧА vs кэф (реальные 921/923 из running)
                 ss = m.get("set_scores") or []
                 srv = str(m.get("serve") or "")
@@ -402,10 +414,11 @@ def cmd_auto(files):
                 except (ValueError, TypeError, IndexError):
                     continue
                 stats = m.get("stats")
-                from pari_lib import match_fair as _mf
-                from pari_lib import game_fair as _gf
-                p1 = serve_point_prob(stats, m.get("tour"), "p1")
-                p2 = serve_point_prob(stats, m.get("tour"), "p2")
+                fw = first_win.get(eid, (None, None))
+                p1 = serve_point_prob(stats, m.get("tour"), "p1",
+                                      fw[0] if isinstance(fw, tuple) else None)
+                p2 = serve_point_prob(stats, m.get("tour"), "p2",
+                                      fw[1] if isinstance(fw, tuple) else None)
                 h1, h2 = _gf(p1, (0, 0)), _gf(p2, (0, 0))
                 if not h1 or not h2:
                     continue
