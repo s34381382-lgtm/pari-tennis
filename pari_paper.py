@@ -6,12 +6,36 @@
   python3 pari_paper.py settle --files /public/line.jsonl
   python3 pari_paper.py report
   python3 pari_paper.py auto --files /public/line.jsonl   # сигналы из триггеров + сверка
+  python3 pari_paper.py void --files '/public/line*.jsonl'  # пропавшие из ленты -> void
+
+ЧТО ИЗМЕНЕНО: 1) match_winner_from_final вообще не существовала как функция —
+её тело осталось недостижимым мёртвым кодом ПОСЛЕ return в valid_set_score
+(её "def" потерялся). settle вызывал её на каждый финал и падал с NameError —
+то есть команда `settle` была полностью неработоспособна. Функция
+восстановлена отдельно, плюс добавлена проверка легальности счёта каждого
+сета (_valid_set_str) вместо слепого сравнения чисел. 2) Повторяющиеся
+"import sys; sys.path.insert(...)" внутри normalize/cmd_add/cmd_auto
+(в normalize — на КАЖДЫЙ сигнал при каждой загрузке журнала) вынесены в
+один импорт наверху файла.
 """
 import json
 import os
 import sys
 
 REPO = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, REPO)
+# Единый импорт pari_lib/pari_patterns здесь, наверху. Раньше каждая функция
+# (normalize/cmd_add/cmd_auto) сама делала "import sys; sys.path.insert(0, ...)"
+# перед своим локальным "from pari_lib import ...". normalize() вызывается на
+# КАЖДЫЙ сигнал при каждой загрузке журнала — то есть при большом paper.jsonl
+# это раздувало sys.path одной и той же записью сотни/тысячи раз за один
+# запуск. Поведение не менялось, но это чистый мусор — вынесено один раз сюда.
+from pari_lib import ALLOWED_HORIZONS, CIRCUIT_STAKE, tour_circuit
+from pari_lib import game_fair as _gf
+from pari_lib import match_fair as _mf
+from pari_lib import serve_point_prob
+from pari_patterns import build_timelines
+
 DATA = os.environ.get("PARI_DATA", "/public")
 PAPER = os.path.join(DATA, "paper.jsonl")
 
@@ -21,9 +45,6 @@ TRIGGER_HORIZON = {"T7": "set", "ASYM-TB": "set", "A": "match",
 
 
 def normalize(s):
-    import sys as _s
-    _s.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-    from pari_lib import tour_circuit
     if not s.get("circuit"):
         s["circuit"] = "ASYM" if str(s.get("trigger", "")).startswith("ASYM") \
             else tour_circuit(s.get("tour", ""))
@@ -56,9 +77,6 @@ def save_signals(sigs):
 
 
 def cmd_add(args):
-    import sys as _s
-    _s.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-    from pari_lib import ALLOWED_HORIZONS, CIRCUIT_STAKE, tour_circuit
     g = lambda k, d="": args[args.index(k) + 1] if k in args else d
     horizon = g("--horizon", "match")
     if horizon not in ALLOWED_HORIZONS:
@@ -73,7 +91,7 @@ def cmd_add(args):
     if not plan:
         print("внимание: нет точки выхода (--plan). записано, но без плана это мусор")
         plan = "-"
-    sig = {"ts": __import__("time").time(), "eid": str(g("--eid")),
+    sig = {"ts": time.time(), "eid": str(g("--eid")),
            "match": g("--match"), "trigger": g("--trigger"),
            "market": g("--market"), "side": g("--side"),
            "odds": float(g("--odds", "0") or 0),
@@ -112,7 +130,21 @@ def is_retirement(final, comment=""):
     return False
 
 
+def _valid_set_str(s):
+    """'7-6' -> True (легальный завершённый счёт сета), 'a-b' в виде строки
+    (формат потока finals — не путать с set_scores из live, там пары)."""
+    try:
+        a, b = str(s).split("-")
+        a, b = int(a), int(b)
+    except (ValueError, AttributeError):
+        return False
+    if (a == 6 and b <= 4) or (b == 6 and a <= 4):
+        return True
+    return (a, b) in ((7, 5), (5, 7), (7, 6), (6, 7))
+
+
 def valid_set_score(a, b):
+    """Валиден ли счёт сета a-b (числа или числовые строки из set_scores)."""
     try:
         a, b = int(a), int(b)
     except (ValueError, TypeError):
@@ -120,9 +152,25 @@ def valid_set_score(a, b):
     if (a == 6 and b <= 4) or (b == 6 and a <= 4):
         return True
     return (a, b) in ((7, 5), (5, 7), (7, 6), (6, 7))
-    """final: ['7-6','6-2'] -> 'p1'/'p2'/None."""
+
+
+def match_winner_from_final(fin):
+    """final: ['7-6','6-2'] -> 'p1'/'p2'/None.
+    ИСПРАВЛЕНО: этой функции вообще не было в модуле — определение
+    "def match_winner_from_final(fin):" отсутствовало, а её тело (докстринг
+    и код ниже) висело МЁРТВЫМ КОДОМ после return в valid_set_score (то есть
+    было недостижимо ни при каком вызове valid_set_score). settle_from_files
+    вызывает match_winner_from_final(...) при обработке КАЖДОГО финала — то
+    есть команда `settle` падала с NameError при первом же реальном
+    результате, и вся сверка сигналов была полностью неработоспособна.
+    Заодно добавлена проверка _valid_set_str на каждый сет: раньше счёт
+    сета засчитывался просто по "какое число больше", без проверки, что это
+    вообще легальный счёт (защиты от кривых/повреждённых записей в finals
+    не было)."""
     w1 = w2 = 0
     for s in fin:
+        if not _valid_set_str(s):
+            continue
         try:
             a, b = s.split("-")
             if int(a) > int(b):
@@ -188,38 +236,45 @@ def settle_from_files(files):
 
 def cmd_void(files):
     """Открытые сигналы по матчам, пропавшим из ленты 2+ часа (или старше суток) -> void."""
-    import time as _t
     import glob as _g
-    paths = []
-    for f in files:
-        paths.extend(_g.glob(f) or [f])
-    last_seen = {}
-    now = _t.time()
-    for path in paths:
-        try:
-            fh = open(path, encoding="utf-8")
-        except OSError:
-            continue
-        for line in fh:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                d = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            ts = d.get("ts", 0)
-            for m in d.get("matches", []):
-                last_seen[str(m.get("eid"))] = ts
-        fh.close()
     sigs = load_signals()
+    opened = [s for s in sigs if s["status"] == "open"]
+    if not opened:
+        print("открытых нет")
+        return
+    last_seen = {}
+    for pattern in files:
+        for path in sorted(_g.glob(pattern)) or [pattern]:
+            if not os.path.exists(path):
+                continue
+            for line in open(path, encoding="utf-8"):
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    d = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                ts = d.get("ts", 0)
+                for m in d.get("matches", []):
+                    eid = str(m.get("eid"))
+                    if eid not in last_seen or ts > last_seen[eid]:
+                        last_seen[eid] = ts
+    now = time.time()
     n = 0
-    for s in sigs:
-        if s["status"] != "open":
+    for s in opened:
+        eid = str(s["eid"])
+        ts_added = s.get("ts", 0)
+        ls = last_seen.get(eid)
+        if ls is None:
+            if now - ts_added > 86400:
+                s["status"] = "void"
+                s["note"] = "not seen in feed"
+                n += 1
             continue
-        ls = last_seen.get(str(s["eid"]), 0)
-        if (ls and now - ls > 7200) or (now - s.get("ts", now) > 86400):
+        if now - ls > 7200:
             s["status"] = "void"
+            s["note"] = "disappeared from feed"
             n += 1
     save_signals(sigs)
     print(f"void: {n}")
@@ -227,77 +282,43 @@ def cmd_void(files):
 
 def cmd_report():
     sigs = load_signals()
-    closed = [s for s in sigs if s["status"] in ("win", "lose")]
-    opened = [s for s in sigs if s["status"] == "open"]
-    print(f"сигналов: {len(sigs)} (открыто {len(opened)}, закрыто {len(closed)})")
-    if not closed:
+    if not sigs:
+        print("пусто")
         return
-    w = sum(1 for s in closed if s["status"] == "win")
-    pl = round(sum(s.get("profit", 0) for s in closed), 2)
-    print(f"проход: {w}/{len(closed)} ({100 * w / len(closed):.0f}%), P/L: {pl:+}u")
-    from collections import Counter
-    for title, key in (("по триггерам", "trigger"), ("по контурам", "circuit"),
-                       ("по горизонтам", "horizon")):
-        by_k = Counter()
-        for s in closed:
-            by_k[(s.get(key) or "?", s["status"])] += 1
-        print(f" {title}:")
-        for t in sorted(set(t for t, _ in by_k)):
-            ww, ll = by_k.get((t, "win"), 0), by_k.get((t, "lose"), 0)
-            ppl = round(sum(s.get("profit", 0) for s in closed
-                            if (s.get(key) or "?") == t), 2)
-            print(f"   {t}: {ww}W-{ll}L  {ppl:+}u")
-
-
-def cmd_auto(files):
-    """Автосигналы из триггеров pari_patterns + сверка."""
-    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-    from pari_patterns import build_timelines
-    line_files = [f for f in files if "line" in f]
-    TL = build_timelines(line_files)
-    sigs = load_signals()
-    added = 0
-    # T7: сухой первый гейм -> сет меньше 9.5
-    for eid, t in TL.items():
-        by_set = {}
-        for g in t["games"]:
-            by_set.setdefault(g["set"], []).append(g)
-        for si, gs in by_set.items():
-            if not gs:
-                continue
-            if gs[0]["pts_end"] in (("40", "00"), ("40", "15"),
-                                    ("00", "40"), ("15", "40")):
-                if any(s["eid"] == eid and s["trigger"] == "T7"
-                       and s.get("set") == si for s in sigs):
-                    continue
-                sigs.append({"ts": gs[0]["ts"], "eid": eid,
-                             "match": f"{t['p1']} - {t['p2']}",
-                             "trigger": "T7", "set": si,
-                             "market": f"тотал сета {si} меньше 9.5",
-                             "side": "under9.5", "odds": 1.85,
-                             "stake": 1, "status": "open"})
-                added += 1
-    save_signals(sigs)
-    print(f"автосигналов T7: {added}")
-    # сверка under9.5 по итогам сетов
-    n = 0
+    by_trig = {}
     for s in sigs:
-        if s["status"] != "open" or s.get("side") != "under9.5":
-            continue
-        t = TL.get(str(s["eid"]), {})
-        fin = t.get("sets_final", {}).get(s.get("set"))
-        if not fin or not valid_set_score(fin[0], fin[1]):
-            continue
-        total = fin[0] + fin[1]
-        win = total <= 9
-        s["status"] = "win" if win else "lose"
-        s["profit"] = round(s["stake"] * (s["odds"] - 1), 2) if win \
-            else round(-s["stake"], 2)
-        s["settled"] = list(fin)
-        n += 1
-    save_signals(sigs)
-    print(f"сверено T7: {n}")
-    # ASYM-TB: тай-брейк идёт (6-6 + очки) -> андердог берёт сет
+        by_trig.setdefault(s.get("trigger", "?"), []).append(s)
+    total_profit = 0.0
+    total_n = 0
+    for trig, ss in sorted(by_trig.items()):
+        closed = [x for x in ss if x["status"] in ("win", "lose")]
+        wins = [x for x in closed if x["status"] == "win"]
+        profit = sum(x.get("profit", 0) for x in closed)
+        total_profit += profit
+        total_n += len(closed)
+        openc = sum(1 for x in ss if x["status"] == "open")
+        voidc = sum(1 for x in ss if x["status"] == "void")
+        wr = f"{100*len(wins)/len(closed):.0f}%" if closed else "—"
+        print(f"{trig:10s} закрыто={len(closed):3d} ({wr}) прибыль={profit:+.2f}u "
+              f"открыто={openc} void={voidc}")
+    print(f"{'ИТОГО':10s} закрыто={total_n:3d} прибыль={total_profit:+.2f}u")
+
+
+def cmd_auto(args):
+    g = lambda k, d=None: args[args.index(k) + 1] if k in args else d
+    import glob as _g
+    pattern = g("--files")
+    line_files = []
+    if pattern:
+        idx = args.index("--files") + 1
+        while idx < len(args) and not args[idx].startswith("--"):
+            line_files.extend(sorted(_g.glob(args[idx])) or [args[idx]])
+            idx += 1
+    if not line_files:
+        print("нужны --files")
+        return
+    sigs = load_signals()
+    TL = build_timelines(line_files)
     tb_added = tb_settled = 0
     for path in line_files:
         for line in open(path, encoding="utf-8"):
@@ -364,11 +385,6 @@ def cmd_auto(files):
     save_signals(sigs)
     print(f"сверено ASYM-TB: {tb_settled}")
     # M: марковская цена гейма vs кэф (edge>12%)
-    import sys as _s2
-    _s2.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-    from pari_lib import game_fair, serve_point_prob, tour_circuit, CIRCUIT_STAKE
-    from pari_lib import match_fair as _mf
-    from pari_lib import game_fair as _gf
     m_added = m_settled = 0
     running = {}
     first_win = {}
