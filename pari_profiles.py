@@ -3,6 +3,18 @@
 
   python3 pari_profiles.py --eid 68041328 --p1 "Эззат Я" --p2 "Мдлулва Возуко"
   python3 pari_profiles.py --fresh line.jsonl   # профили всем свежим без файлов
+
+ЧТО ИЗМЕНЕНО: 1) surname_lat падала с IndexError на имени из одних пробелов
+(".split()[0]" на пустом списке) — сейчас есть явная проверка. 2) Нечёткий
+поиск по кэшу (find_te_url) без инициала раньше молча брал ПЕРВЫЙ попавшийся
+URL под похожей фамилией, даже если в кэше под этой же фамилией лежат
+РАЗНЫЕ игроки — то есть рисковал подставить историю чужого игрока и передать
+её дальше в психо-профиль/аналитику. Теперь отдаёт кэш без вопросов только
+если для этой фамилии в кэше ровно один URL; при реальной неоднозначности
+без инициала — не гадает. 3) Проверка заголовка страницы при подтверждении
+инициала сверяла только первые 4 буквы фамилии независимо от её длины —
+для длинных фамилий это давало ложные совпадения ("Petrova" проходило бы
+как "Petrovskaya"); теперь порог растёт вместе с длиной фамилии (до 6 букв).
 """
 import json
 import os
@@ -61,7 +73,7 @@ def save_cache(c):
 
 def surname_lat(name):
     """'Эззат Я' -> 'Ezzat' (фамилия латиницей для поиска)."""
-    if not name:
+    if not name or not name.strip():
         return ""
     sur = name.strip().split()[0]
     return sur.translate(RU2EN)
@@ -107,10 +119,22 @@ def find_te_url(surname, initial="", firstname=""):
         surnames.setdefault(s, []).append(k)
     best = difflib.get_close_matches(surname, list(surnames.keys()), n=1, cutoff=0.8)
     if best:
-        for k in surnames[best[0]]:
-            if not initial or k.split("|")[1] == initial:
+        keys = surnames[best[0]]
+        if not initial:
+            # ИСПРАВЛЕНО: без инициала нечем отличить одного игрока от
+            # другого с похожей фамилией. Раньше здесь брался keys[0] вслепую
+            # (порядок dict) — если под этой фамилией в кэше реально лежат
+            # РАЗНЫЕ игроки, можно было тихо подставить чужую историю. Теперь:
+            # если все ключи с этой фамилией указывают на один и тот же URL —
+            # неоднозначности нет, отдаём его. Если URL разные — не гадаем.
+            urls = {cache[k] for k in keys}
+            if len(urls) == 1:
+                return cache[keys[0]], None
+            return None, "ambiguous cache match without initial"
+        for k in keys:
+            if k.split("|")[1] == initial:
                 return cache[k], None
-        return cache[surnames[best[0]][0]], "fuzzy-initial"
+        return cache[keys[0]], "fuzzy-initial"
     queries = [f"{surname} tennisexplorer"]
     if firstname:
         queries.append(f"tennisexplorer {surname} {firstname}")
@@ -127,13 +151,21 @@ def find_te_url(surname, initial="", firstname=""):
     if not cands:
         return None, "not found"
     if initial:
+        # ИСПРАВЛЕНО: сверка заголовка раньше сравнивала только первые 4
+        # буквы фамилии НЕЗАВИСИМО от её длины — для длинной фамилии это
+        # давало ложные совпадения (например "Petrova" проходило бы как
+        # правильное совпадение для страницы "Petrovskaya", т.к. "petr" —
+        # префикс обеих). Порог теперь растёт вместе с длиной фамилии
+        # (до 6 букв), но не сужается для коротких — поведение для них не
+        # изменилось.
+        need = min(6, len(surname))
         for url in cands[:6]:
             try:
                 h = http(url)
                 t = re.search(r"<h1[^>]*>(.*?)</h1>", h, re.S)
                 title = re.sub(r"<[^>]+>", "", t.group(1)).strip() if t else ""
                 parts = title.replace("- profile", "").strip().split()
-                if len(parts) >= 2 and parts[0].lower().startswith(surname.lower()[:4]) \
+                if len(parts) >= 2 and parts[0].lower().startswith(surname.lower()[:need]) \
                         and parts[1][:1].upper() == initial.upper():
                     cache[key] = url
                     save_cache(cache)
@@ -149,7 +181,14 @@ def find_te_url(surname, initial="", firstname=""):
 
 
 def parse_te(html):
-    """Последние матчи + инфа профиля."""
+    """Последние матчи + инфа профиля.
+    ОГРАНИЧЕНИЕ (зафиксировано, не правил вслепую без живого HTML для сверки):
+    разбор построен на regex по конкретной разметке TennisExplorer. Если
+    сайт поменяет структуру таблицы (порядок/названия колонок), re.findall
+    молча вернёт [] — функция не бросит исключение и не даст знать, что
+    данные потерялись, просто отдаст профиль с пустым "recent". Стоит хотя
+    бы логировать случай len(rows)==0 при непустом html, чтобы отличать
+    "у игрока правда нет истории" от "парсер сломался"."""
     out = {"recent": []}
     m = re.search(r"<h1[^>]*>(.*?)</h1>", html, re.S)
     if m:

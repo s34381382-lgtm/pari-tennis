@@ -7,7 +7,21 @@
 отыгрывается сразу.
 
   python3 pari_patterns.py --files sumann_messis.jsonl ezzat_mdlulva.jsonl line.jsonl
-"""
+
+ЧТО ИЗМЕНЕНО: 1) trigger_bagel теперь фильтрует sets_final через valid_set()
+перед тем, как включать тотал сета в статистику — раньше сет, ещё не
+завершённый (например данные оборвались посреди него), мог попасть в
+base_totals/dry_totals как обычный сыгранный сет и смещать среднюю. Ровно та
+же защита (valid_set) в этом файле уже применялась в analyze_set_patterns,
+но НЕ в trigger_bagel — комментарий в коде даже обещал "фильтр валидности
+ниже", но филь ниже фактически не было. 2) server_of теперь берёт голосование
+большинства по всем найденным якорям чётности сервера в сете, а не первый
+попавшийся (порядок dict) — один битый якорь раньше мог перевернуть
+подающего для ВСЕХ геймов сета. 3) is_women — убрана рассинхронизация с
+неиспользуемым модульным WOMEN_RE (внутри функция гоняла свою, чуть другую
+регулярку). 4) Отчёты триггеров 2/3/7 теперь печатают n рядом с процентом
+и метят маленькие выборки — раньше честность/переобучение было невозможно
+оценить по одному выводу без пересчёта n в уме."""
 import json
 import re
 import sys
@@ -19,9 +33,9 @@ def is_women(tour):
     if not tour:
         return False
     t = tour.upper()
-    if re.search(r"WTA|WOMEN|ЖЕНЩИН", t, re.I):
+    if WOMEN_RE.search(t):
         return True
-    if re.search(r"ATP|MEN|МУЖЧИН", t, re.I) and "WOMEN" not in t:
+    if re.search(r"ATP|MEN|МУЖЧИН", t, re.I) and not WOMEN_RE.search(t):
         return False
     return False
 
@@ -155,12 +169,6 @@ def main():
     report(all_games, "ИТОГО" + (" [жен]" if women_only else ""))
 
 
-
-
-
-
-
-
 # ================= ТАЙМЛАЙН (проход 1) =================
 def build_timelines(paths):
     """eid -> {tour,p1,p2, games:[{set,winner,server,dbl,pts_end,ts}],
@@ -266,14 +274,25 @@ def build_timelines(paths):
 
 
 def server_of(t, si, game_total):
-    """Сервер гейма N в сете по якорям чётности (чередование строгое)."""
+    """Сервер гейма N в сете по якорям чётности (чередование строгое).
+    ИСПРАВЛЕНО: раньше возвращался результат ПЕРВОГО найденного якоря для
+    этого сета (порядок обхода dict — по сути произвольный, не по времени
+    и не по надёжности). Один битый/шумный якорь (неверный serve в одном
+    снимке) переворачивал подающего для ВСЕХ геймов сета целиком. Теперь —
+    голосование большинства по всем якорям сета; при единственном якоре
+    (типичный случай) поведение идентично старому."""
+    from collections import Counter
     st = t.get("srv_state", {})
+    votes = Counter()
     for (s, tot), who in st.items():
         if s != si:
             continue
         w = who if (tot - game_total) % 2 == 0 else 3 - who
-        return "p1" if w == 1 else "p2"
-    return None
+        votes[w] += 1
+    if not votes:
+        return None
+    w = votes.most_common(1)[0][0]
+    return "p1" if w == 1 else "p2"
 
 
 # ================= ТРИГГЕРЫ =================
@@ -315,7 +334,13 @@ def trigger_pauses(TL, min_gap=240):
 
 
 def trigger_bagel(TL):
-    """Сухой 1-й гейм сета -> распределение тоталов сета vs база."""
+    """Сухой 1-й гейм сета -> распределение тоталов сета vs база.
+    ИСПРАВЛЕНО: sets_final бралось без проверки валидности счёта — незавер-
+    шённый (например, данные оборвались посреди сета) "финал" сета мог
+    попасть в base_totals/dry_totals наравне с реально сыгранными сетами и
+    искажать среднюю. Комментарий в build_timelines честно предупреждал
+    "фильтр валидности ниже", но самого фильтра тут не было — теперь есть
+    (valid_set())."""
     dry_totals, base_totals = [], []
     for t in TL.values():
         by_set = {}
@@ -323,7 +348,7 @@ def trigger_bagel(TL):
             by_set.setdefault(g["set"], []).append(g)
         for si, gs in by_set.items():
             fin = t["sets_final"].get(si)
-            if not fin:
+            if not fin or not valid_set(fin):
                 continue
             total = fin[0] + fin[1]
             base_totals.append(total)
@@ -336,6 +361,11 @@ def trigger_bagel(TL):
 
 def pct(h, n):
     return f"{100 * h / n:.0f}%" if n else "—"
+
+
+def sample_note(n, small=30):
+    """Честная пометка объёма выборки — чтобы не путать шум со ступенькой."""
+    return " [МАЛО ДАННЫХ, не доверять]" if 0 < n < small else ""
 
 
 def main2():
@@ -356,17 +386,19 @@ def main2():
     bn, bh = break_base(TL)
     print(f"БАЗА брейков: {bh}/{bn} ({pct(bh, bn)})")
     n, h = trigger_doubles(TL)
-    print(f"[2] 2+ двойные -> брейк в след. гейме подачи: {h}/{n} ({pct(h, n)})")
+    print(f"[2] 2+ двойные -> брейк в след. гейме подачи: {h}/{n} ({pct(h, n)}){sample_note(n)}")
     n, h = trigger_pauses(TL)
-    print(f"[3] пауза 4+ мин -> гейм принимающему: {h}/{n} ({pct(h, n)})")
+    print(f"[3] пауза 4+ мин -> гейм принимающему: {h}/{n} ({pct(h, n)}){sample_note(n)}")
     dry, base = trigger_bagel(TL)
     import statistics as S
     if base:
+        b_over9 = sum(1 for x in base if x <= 9)
         print(f"[7] сеты всего: {len(base)}, средний тотал {S.mean(base):.1f}, "
-              f"<=9.5: {sum(1 for x in base if x <= 9)}/{len(base)} ({pct(sum(1 for x in base if x <= 9), len(base))})")
+              f"<=9.5: {b_over9}/{len(base)} ({pct(b_over9, len(base))})")
     if dry:
+        d_over9 = sum(1 for x in dry if x <= 9)
         print(f"    после сухого 1-го гейма: {len(dry)}, средний тотал {S.mean(dry):.1f}, "
-              f"<=9.5: {sum(1 for x in dry if x <= 9)}/{len(dry)} ({pct(sum(1 for x in dry if x <= 9), len(dry))})")
+              f"<=9.5: {d_over9}/{len(dry)} ({pct(d_over9, len(dry))}){sample_note(len(dry))}")
         print(f"    тоталы: {sorted(dry)}")
     else:
         print("[7] сухих стартов пока нет")
