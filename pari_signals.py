@@ -5,7 +5,10 @@
   python3 pari_signals.py --follow --interval 20
   python3 pari_signals.py --file /tmp/x.jsonl # один прогон по файлу (тест)
 
-Триггеры: M-edge (марковская цена vs кэф), коллапс (2+ гейма подряд с ведения),
+Триггеры: M-edge (марковская цена vs кэф), GAME (эмпирический холд
+поинт-состояния vs геймовый кэф — калибровка пул 2268 геймов),
+ПРОСАДКА (отдал с 40-0/0-40 -> против следующей подачи),
+коллапс (2+ гейма подряд с ведения),
 чок (проигрыш с 40-0/40-15), свежие матчи, конец сета у фаворита в борьбе.
 
 ЧТО ИЗМЕНЕНО (главное): комментарий "# --- M-edge: ... ---    try:" склеился
@@ -26,6 +29,7 @@ import time
 REPO = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, REPO)
 from pari_lib import game_fair, match_fair, serve_point_prob, tour_circuit
+from pari_patterns import is_women
 
 PHONE = "localhost:45375"
 ADB_PORT_FILE = "/tmp/adb_port.txt"
@@ -235,6 +239,116 @@ def check_match(eid, snaps, state):
                             who = p1 if side == "p1" else p2
                             sigs.append(f"EDGE {nm}: модель {fo:.0%} vs кэф {bo} "
                                         f"на {who} (+{fo - 1/bo:.0%})")
+    except Exception:
+        pass
+
+    # --- GAME: эмпирический холд поинт-состояния vs геймовый кэф ---
+    # Калибровка pool_states.py (пул 2268 геймов): состояние "видели" =
+    # текущее тоже видели, таблица применима к live-счёту напрямую.
+    # lead40 .968 (Ж.953/М.977), 30-0 .927, ровно .620 (Ж.552/М.694),
+    # 15-30 .445 (Ж.342/М.561), 0-30 .300 (Ж.237/М.381), 0-40 сейв .139.
+    try:
+        if ss and srv in ("1", "2") and m.get("odds") and len(game) == 2:
+            a, b = int(ss[-1][0]), int(ss[-1][1])
+            cur_gno = a + b + 1
+            side = "p1" if srv == "1" else "p2"
+            gm = (str(game[0]), str(game[1]))
+            sp, rp = (gm[0], gm[1]) if side == "p1" else (gm[1], gm[0])
+            w = is_women(m.get("tour"))
+            key = None
+            if (sp, rp) in (("40", "00"), ("40", "15")):
+                key = "lead40"
+            elif (sp, rp) == ("30", "00"):
+                key = "s30_0"
+            elif (sp == "40" and rp == "40") or "A" in gm:
+                key = "deuce"
+            elif (sp, rp) == ("15", "30"):
+                key = "s15_30"
+            elif (sp, rp) == ("00", "30"):
+                key = "s0_30"
+            elif (sp, rp) in (("00", "40"), ("15", "40")):
+                key = "def40"
+            if key:
+                tab = {"lead40": (0.968, 0.953, 0.977),
+                       "s30_0": (0.927, 0.927, 0.927),
+                       "deuce": (0.620, 0.552, 0.694),
+                       "s15_30": (0.445, 0.342, 0.561),
+                       "s0_30": (0.300, 0.237, 0.381),
+                       "def40": (0.139, 0.139, 0.139)}[key]
+                p = tab[1] if w else tab[2]
+                want_s = "%1" if side == "p1" else "%2"
+                want_o = "%2" if side == "p1" else "%1"
+                vs = vo = None
+                for o in m.get("odds", []):
+                    mk = str(o.get("m", ""))
+                    if "то выиграет гейм" not in mk or str(o.get("pt")) != str(cur_gno):
+                        continue
+                    if want_s in mk and vs is None:
+                        vs = o.get("v")
+                    elif want_o in mk and vo is None:
+                        vo = o.get("v")
+                fired = False
+                if vs and p - 1 / vs > EDGE_MIN:
+                    gk = ("game", side, key, round(vs, 2))
+                    if st.get("game") != gk:
+                        st["game"] = gk
+                        who = p1 if side == "p1" else p2
+                        sigs.append(f"ГЕЙМ {nm}: {who} держит с {sp}-{rp} "
+                                    f"p={p:.0%} vs кэф {vs} (+{p - 1/vs:.0%})")
+                        fired = True
+                if not fired and vo and (1 - p) - 1 / vo > EDGE_MIN:
+                    gk = ("game", "anti-" + side, key, round(vo, 2))
+                    if st.get("game") != gk:
+                        st["game"] = gk
+                        who = p2 if side == "p1" else p1
+                        sigs.append(f"ГЕЙМ {nm}: против {p1 if side == 'p1' else p2} "
+                                    f"с {sp}-{rp} p_брейк={1-p:.0%} vs кэф {vo} "
+                                    f"(+{1-p - 1/vo:.0%})")
+    except Exception:
+        pass
+
+    # --- ПРОСАДКА: отдал гейм с 40-0/0-40 -> против его следующей подачи ---
+    # Следствия из пула: после чока 17/30 (56.7%), после 0-40 наружу 59.0% (n=344).
+    try:
+        cur_ab = (hist[-1][0], hist[-1][1]) if hist else None
+        if cur_ab and srv in ("1", "2") and len(game) == 2:
+            gm = (str(game[0]), str(game[1]))
+            side = "p1" if srv == "1" else "p2"
+            if st.get("last_ab") != cur_ab:
+                # гейм закрыт: кто взял и было ли давление 40-0/0-40
+                if len(hist) >= 2:
+                    pa, pb, _ = hist[-2]
+                    ca, cb = cur_ab
+                    if (ca == pa + 1) != (cb == pb + 1):
+                        won = "p1" if ca == pa + 1 else "p2"
+                        fin_srv = "p2" if side == "p1" else "p1"
+                        if won != fin_srv and st.get("had_lead") == fin_srv:
+                            st["fade"] = (fin_srv, cur_ab)
+                st["last_ab"] = cur_ab
+                st["had_lead"] = None
+            else:
+                if st.get("had_lead") is None:
+                    snaps_e = [mm for dd in snaps for mm in dd.get("matches", [])
+                               if str(mm.get("eid")) == str(eid)][-8:]
+                    for mm in snaps_e:
+                        gg = mm.get("game") or []
+                        if len(gg) == 2 and str(mm.get("serve")) == srv:
+                            pp = (str(gg[0]), str(gg[1]))
+                            mine, ors = (pp[0], pp[1]) if side == "p1" else (pp[1], pp[0])
+                            if (mine, ors) in (("40", "00"), ("40", "15"),
+                                               ("00", "40"), ("15", "40")):
+                                st["had_lead"] = side
+                                break
+            fd = st.get("fade")
+            if fd and fd[1] != cur_ab and side == fd[0]:
+                sp, rp = (gm[0], gm[1]) if side == "p1" else (gm[1], gm[0])
+                if (sp, rp) not in (("40", "00"), ("40", "15")):
+                    if st.get("fade_fired") != (fd[0], cur_ab):
+                        st["fade_fired"] = (fd[0], cur_ab)
+                        who = p1 if side == "p1" else p2
+                        sigs.append(f"ПРОСАДКА {nm}: {who} отдал прошлый с 40-0/0-40 — "
+                                    f"против его подачи (счёт {cur_ab[0]}-{cur_ab[1]})")
+                        st["fade"] = None
     except Exception:
         pass
     return sigs
