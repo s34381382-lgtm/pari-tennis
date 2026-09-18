@@ -54,11 +54,11 @@ class TestSetProbGuards(unittest.TestCase):
 
 class TestServeCalibration(unittest.TestCase):
     def test_curve_three_buckets(self):
-        # Середина слита в одну корзину (шум ±6 п.п. убран).
-        self.assertEqual(hold_for_odds(1.2), 0.83)
-        self.assertEqual(hold_for_odds(2.0), 0.79)
-        self.assertEqual(hold_for_odds(3.9), 0.79)
-        self.assertEqual(hold_for_odds(10.0), 0.65)
+        # Замер 14-15.09, 3349 геймов: 76.4/69.0/48.7.
+        self.assertEqual(hold_for_odds(1.2), 0.764)
+        self.assertEqual(hold_for_odds(2.0), 0.69)
+        self.assertEqual(hold_for_odds(3.9), 0.69)
+        self.assertEqual(hold_for_odds(10.0), 0.487)
 
     def test_ace_volume_weight(self):
         stats = {"эйсы": {"c1": 3, "c2": 0}, "двойные ошибки": {"c1": 0, "c2": 0}}
