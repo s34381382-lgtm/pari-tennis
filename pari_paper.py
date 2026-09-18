@@ -509,6 +509,49 @@ def cmd_auto(args):
         m_settled += 1
     save_signals(sigs)
     print(f"сверено M: {m_settled}")
+    # D: подающий на сет -> брейк принимающего (рейтовый, без геймовых кэфов).
+    # Замер 14-15.09: 55/117 (47%), на LAB 37/56 (66%) — LAB-сигнал.
+    # Ставка против подающего: исход гейма из TL (game_winner_after-логика
+    # через смену счёта уже в build_timelines).
+    d_added = d_settled = 0
+    for eid, t in TL.items():
+        if any(s["eid"] == str(eid) and s["trigger"] == "D" for s in sigs):
+            continue
+        for g in t.get("games", []):
+            if not g.get("server") or not g.get("winner"):
+                continue
+            ab = g.get("ab") or (0, 0)
+            srv = g["server"]
+            my = ab[0] if srv == "p1" else ab[1]
+            op = ab[1] if srv == "p1" else ab[0]
+            # гейм, после которого счёт стал 6-? (подающий закрыл сет?) —
+            # нам нужен гейм ПРИ 5-x: before = ab - winner.
+            before = (ab[0] - (1 if g["winner"] == "p1" else 0),
+                      ab[1] - (1 if g["winner"] == "p2" else 0))
+            b_my = before[0] if srv == "p1" else before[1]
+            b_op = before[1] if srv == "p1" else before[0]
+            if b_my == 5 and b_op < 5:
+                fade = "p2" if srv == "p1" else "p1"
+                hit = (g["winner"] == fade)
+                circ = tour_circuit(t.get("tour"))
+                sigs.append({"ts": g.get("ts", 0), "eid": str(eid),
+                             "match": f"{t.get('p1')} - {t.get('p2')}",
+                             "trigger": "D",
+                             "market": "брейк принимающего при подаче на сет",
+                             "side": fade, "odds": 0,
+                             "fair": 0.47 if circ != "LAB" else 0.66,
+                             "stake": CIRCUIT_STAKE.get(circ, 0.5),
+                             "status": "win" if hit else "lose",
+                             "profit": 0.0,
+                             "horizon": "game", "circuit": circ,
+                             "tour": t.get("tour"),
+                             "plan": "рейт без кэфа — бумага"})
+                d_added += 1
+                d_settled += 1
+                break  # один сигнал на матч для D
+    save_signals(sigs)
+    print(f"автосигналов D: {d_added} (рейт, без P/L — кэфов нет в live)")
+    print(f"сверено D: {d_settled}")
 
 
 def main():
