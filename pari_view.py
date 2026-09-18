@@ -324,17 +324,20 @@ def wind_for(tour):
             if indoor:
                 return (0, 0, True)
             c = WIND_CACHE.get(key)
-            if c and _t.time() - c[0] < 3600:
+            if c and _t.time() - c[0] < (600 if c[1][:2] == (None, None) else 3600):
                 return c[1]
             try:
                 u = (f"https://api.open-meteo.com/v1/forecast?latitude={la}&longitude={lo}"
                      f"&current=wind_speed_10m,wind_gusts_10m&wind_speed_unit=ms&timezone=auto")
+                # 18.09: таймаут 12→4с (эфир не должен виснуть на погоде),
+                # негативный кеш 10 мин — чтоб не долбить API при обрыве.
                 d = __import__("json").load(_u.urlopen(
-                    _u.Request(u, headers={"User-Agent": "Mozilla/5.0"}), timeout=12))
+                    _u.Request(u, headers={"User-Agent": "Mozilla/5.0"}), timeout=4))
                 w = (d["current"]["wind_speed_10m"], d["current"]["wind_gusts_10m"], False)
                 WIND_CACHE[key] = (_t.time(), w)
                 return w
             except Exception:
+                WIND_CACHE[key] = (_t.time(), (None, None, False))
                 return (None, None, False)
     return (None, None, False)
 

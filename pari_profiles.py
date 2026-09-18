@@ -202,6 +202,12 @@ def parse_te(html):
         r'<td class="tl"><a[^>]*>(.*?)</a></td>\s*'
         r'<td class="course">([^<]*)</td>\s*<td class="course">([^<]*)</td>',
         html, re.S)
+    if not rows and len(html or "") > 5000:
+        # Парсер сломался (разметка сменилась), а не "истории нет" —
+        # кричим в stderr, чтоб не молчать. 18.09.
+        import sys as _s
+        _s.stderr.write("WARN parse_te: html %d bytes, rows=0 — разметка TE сменилась?\n" % len(html))
+        out["parser_broken"] = True
     for r in rows[:8]:
         match = re.sub(r"<[^>]+>", "", r[1]).replace("&nbsp;", " ").strip()
         score = re.sub(r"<[^>]+>", "", r[3]).strip()

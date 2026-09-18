@@ -40,6 +40,20 @@ def is_women(tour):
     return False
 
 
+def sex_weight(tour):
+    """Вес 'женскости' тура: 1.0 Ж, 0.0 М, 0.5 неизвестно (юниоры/ITF-миксты).
+    18.09: раньше неизвестные молча падали в мужскую базу p=0.63 —
+    перекос. Теперь вызыватель блендит Ж/М таблицы по весу."""
+    if not tour:
+        return 0.5
+    t = tour.upper()
+    if WOMEN_RE.search(t):
+        return 1.0
+    if re.search(r"ATP|MEN|МУЖЧИН", t, re.I):
+        return 0.0
+    return 0.5
+
+
 def games_from_browser(path):
     """Из глубокого jsonl (pari_obzor): [(winner, server)] по порядку геймов.
     Сервер есть не в каждом снимке -> якорим чётность по тем что есть."""

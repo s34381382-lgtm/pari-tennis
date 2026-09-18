@@ -29,7 +29,8 @@ import time
 REPO = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, REPO)
 from pari_lib import game_fair, match_fair, serve_point_prob, tour_circuit
-from pari_patterns import is_women
+from pari_lib import holds_for_match
+from pari_patterns import is_women, sex_weight
 
 PHONE = "localhost:45375"
 ADB_PORT_FILE = "/tmp/adb_port.txt"
@@ -220,9 +221,15 @@ def check_match(eid, snaps, state):
                     sw[1] += 1
             a, b = int(ss[-1][0]), int(ss[-1][1])
             stats = m.get("stats")
-            p1p = serve_point_prob(stats, m.get("tour"), "p1")
-            p2p = serve_point_prob(stats, m.get("tour"), "p2")
+            # games_served: геймов уже подано каждым (для веса эйсов)
+            cur_no = a + b + 1
+            g1 = (cur_no + (1 if srv == "1" else 0)) // 2
+            g2 = (cur_no + (1 if srv == "2" else 0)) // 2
+            p1p = serve_point_prob(stats, m.get("tour"), "p1", games_served=g1)
+            p2p = serve_point_prob(stats, m.get("tour"), "p2", games_served=g2)
             h1, h2 = game_fair(p1p, (0, 0)), game_fair(p2p, (0, 0))
+            # поправка "после ровно": была мертва, теперь живая
+            h1, h2 = holds_for_match(h1, h2, st.get("prev_deuce_server"))
             o1 = o2 = None
             for o in m.get("odds", []):
                 if o.get("f") == 921:
@@ -254,7 +261,7 @@ def check_match(eid, snaps, state):
             side = "p1" if srv == "1" else "p2"
             gm = (str(game[0]), str(game[1]))
             sp, rp = (gm[0], gm[1]) if side == "p1" else (gm[1], gm[0])
-            w = is_women(m.get("tour"))
+            sw = sex_weight(m.get("tour"))
             key = None
             if (sp, rp) in (("40", "00"), ("40", "15")):
                 key = "lead40"
@@ -275,7 +282,7 @@ def check_match(eid, snaps, state):
                        "s15_30": (0.445, 0.342, 0.561),
                        "s0_30": (0.300, 0.237, 0.381),
                        "def40": (0.139, 0.139, 0.139)}[key]
-                p = tab[1] if w else tab[2]
+                p = sw * tab[1] + (1 - sw) * tab[2]
                 want_s = "%1" if side == "p1" else "%2"
                 want_o = "%2" if side == "p1" else "%1"
                 vs = vo = None
@@ -349,6 +356,34 @@ def check_match(eid, snaps, state):
                         sigs.append(f"ПРОСАДКА {nm}: {who} отдал прошлый с 40-0/0-40 — "
                                     f"против его подачи (счёт {cur_ab[0]}-{cur_ab[1]})")
                         st["fade"] = None
+    except Exception:
+        pass
+
+    # --- трекинг "после ровно" для следующего вызова M-edge ---
+    # Поправка holds_for_match была мертва — теперь живёт здесь.
+    try:
+        if len(hist) >= 2:
+            prev_ab = (hist[-2][0], hist[-2][1])
+            if st.get("deuce_ab") != prev_ab:
+                st["deuce_ab"] = prev_ab
+                st["prev_deuce_server"] = None
+                snaps_e = [mm for dd in snaps for mm in dd.get("matches", [])
+                           if str(mm.get("eid")) == str(eid)][-12:]
+                for mm in snaps_e:
+                    gg = mm.get("game") or []
+                    if len(gg) == 2 and ("40" in gg and ("A" in gg or list(gg) == ["40", "40"])):
+                        sc = mm.get("set_scores") or []
+                        if sc:
+                            try:
+                                cur_sc = (int(sc[-1][0]), int(sc[-1][1]))
+                                if cur_sc == prev_ab or \
+                                   (cur_sc[0] + cur_sc[1] == prev_ab[0] + prev_ab[1]):
+                                    sv = str(mm.get("serve") or "")
+                                    if sv in ("1", "2"):
+                                        st["prev_deuce_server"] = "p1" if sv == "1" else "p2"
+                                    break
+                            except (ValueError, TypeError):
+                                pass
     except Exception:
         pass
     return sigs
