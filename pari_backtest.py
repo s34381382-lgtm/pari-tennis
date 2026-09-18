@@ -3,8 +3,10 @@
 
   A: 0-40 на подаче фаворита -> фаворит берёт матч
   B: фаворит проиграл 1-й сет в борьбе -> фаворит берёт 2-й
-  C: 15-30 на сильном сервере -> подающий берёт гейм
-  D: подающий на сет с геймовым кэфом <1.30 -> гейм берёт принимающий
+  C: 15-30 на сильном сервере -> подающий берёт гейм (рейт, без геймовых
+     кэфов — их нет в live-ленте, только в прематче; кэфы опциональны)
+  D: подающий на сет -> брейк принимающего (рейт; геймовый кэф <1.30
+     опционален — в live-ленте отсутствует)
 
   python3 pari_backtest.py --files night/*.jsonl
 
@@ -262,22 +264,42 @@ def main():
             except Exception:
                 continue
             if g == ["15", "30"]:
-                # C: сильный сервер? эйсы>0 и двойных 0 к этому моменту
+                # C: сильный сервер? 18.09: было "эйсы>0" — в ленте эйсов
+                # нет в 86% строк, триггер голодал (0/0). Теперь прокси:
+                # прематч-фаворит ИЛИ чистые двойные (0) + эмпирика 15-30.
+                # Эмпирика пула: 15-30 холд 44.5% (Ж34.2/М56.1) — сам по себе
+                # не edge, нужен фильтр силы подачи.
                 st = sn.get("stats", {})
-                ac = st.get("эйсы", {})
+                strong = False
+                # 1) прематч-фаворит подаёт — сильный по определению линии
                 try:
-                    ai = int(ac.get("c1" if server == "p1" else "c2", 0) or 0)
-                except (ValueError, TypeError):
-                    ai = 0
-                if ai > 0:
+                    _fav, _ = fav_of(s)
+                    if _fav == server:
+                        strong = True
+                except Exception:
+                    pass
+                # 2) фолбэк: двойных 0 (не сыплет) — слабая, но живая прокси
+                if not strong:
+                    try:
+                        _db = st.get("двойные ошибки", {})
+                        _d = int(_db.get("c1" if server == "p1" else "c2", 0) or 0)
+                        if _d == 0:
+                            strong = True
+                    except (ValueError, TypeError):
+                        pass
+                if strong:
+                    # Рейт без геймовых кэфов (их нет в live — только прематч).
+                    # Кэф опционален: если вдруг есть — пишем для ROI, нет — всё
+                    # равно считаем исход гейма.
                     o = find_game_odd(s, idx, server, cur_no)
                     w = game_winner_after(s, idx)
-                    if o and w:
-                        sigC.append(o)
-                        sumC += o
+                    if w:
+                        sigC.append(o or 0)
+                        if o:
+                            sumC += o
                         if w == server:
-                            hitC.append(o)
-            # D: подающий на сет + его геймовый кэф <1.30
+                            hitC.append(o or 0)
+            # D: подающий на сет -> брейк? (рейт; геймовый кэф опционален)
             ss = sn.get("ss") or []
             if g and ss:
                 try:
@@ -288,16 +310,16 @@ def main():
                 ors = b if server == "p1" else a
                 if mine == 5 and ors < 5:
                     o = find_game_odd(s, idx, server, cur_no)
-                    if o and o < 1.30:
-                        w = game_winner_after(s, idx)
-                        if w:
-                            sigD.append((o, w != server))
+                    w = game_winner_after(s, idx)
+                    if w:
+                        sigD.append((o or 0, w != server))
+                        if o:
                             sumD += find_game_odd(s, idx,
                                              "p2" if server == "p1" else "p1",
                                              cur_no) or 0
-                            if w != server:
-                                hitD.append(o)
-                            break  # один сигнал на матч для D
+                        if w != server:
+                            hitD.append(o or 0)
+                        break  # один сигнал на матч для D
 
     def roi(hits, sigs):
         if not sigs:
@@ -305,11 +327,21 @@ def main():
         st = sum(h - 1 for h in hits) - (len(sigs) - len(hits))
         return f"{st:+.2f}u ({100 * len(hits) / len(sigs):.0f}%)"
 
+    def rate(hits, sigs):
+        if not sigs:
+            return "—"
+        return f"{len(hits)}/{len(sigs)} ({100 * len(hits) / len(sigs):.0f}%)"
+
     print(f"[A] 0-40 на фаворите, фаворит берёт матч: {len(hitA)}/{len(sigA)} {roi(hitA, sigA)}")
     print(f"[B] фаворит проиграл 1-й в борьбе, берёт 2-й: {len(hitB)}/{len(sigB)}")
-    print(f"[C] 15-30 сильный сервер держит гейм: {len(hitC)}/{len(sigC)} {roi(hitC, sigC)}")
+    # C/D: геймовых кэфов в live нет — ROI только по тем, где кэф вдруг был.
+    _c_odds = [o for o in sigC if o]
+    _c_hit = [o for o in hitC if o]
+    _c_roi = f" {roi(_c_hit, _c_odds)} по кэфам" if _c_odds else ""
+    print(f"[C] 15-30 сильный сервер держит гейм: {rate(hitC, sigC)}{_c_roi}")
     dh = sum(1 for _, w in sigD if w)
-    print(f"[D] подающий на сет кэф<1.30, брейк: {dh}/{len(sigD)}")
+    print(f"[D] подающий на сет, брейк принимающего: {dh}/{len(sigD)}" +
+          (f" ({100*dh/len(sigD):.0f}%)" if sigD else ""))
 
 
 def final_set_score(s, si):

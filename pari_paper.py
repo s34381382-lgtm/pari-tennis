@@ -305,15 +305,26 @@ def cmd_report():
 
 
 def cmd_auto(args):
-    g = lambda k, d=None: args[args.index(k) + 1] if k in args else d
     import glob as _g
-    pattern = g("--files")
+    # 18.09: main() передаёт уже список файлов (files), а не argv-хвост —
+    # старая версия ждала "--files" внутри и всегда отвечала "нужны --files".
+    # Принимаем оба формата: ["--files", pat...] или [file...].
+    pats = []
+    if args and args[0] == "--files":
+        pats = args[1:]
+    elif args and any(a.startswith("--") for a in args):
+        g = lambda k, d=None: args[args.index(k) + 1] if k in args else d
+        pattern = g("--files")
+        if pattern:
+            idx = args.index("--files") + 1
+            while idx < len(args) and not args[idx].startswith("--"):
+                pats.append(args[idx])
+                idx += 1
+    else:
+        pats = list(args or [])
     line_files = []
-    if pattern:
-        idx = args.index("--files") + 1
-        while idx < len(args) and not args[idx].startswith("--"):
-            line_files.extend(sorted(_g.glob(args[idx])) or [args[idx]])
-            idx += 1
+    for p in pats:
+        line_files.extend(sorted(_g.glob(p)) or [p])
     if not line_files:
         print("нужны --files")
         return
@@ -448,9 +459,11 @@ def cmd_auto(args):
                 if not o1 or not o2:
                     continue
                 cand = None
-                if fair1 - 1 / o1 > 0.12:
+                # 18.09: порог по контуру (LAB 0.16 — маржа выше).
+                _em = 0.16 if tour_circuit(m.get("tour")) == "LAB" else 0.12
+                if fair1 - 1 / o1 > _em:
                     cand = ("p1", o1, fair1)
-                elif (1 - fair1) - 1 / o2 > 0.12:
+                elif (1 - fair1) - 1 / o2 > _em:
                     cand = ("p2", o2, round(1 - fair1, 3))
                 if not cand:
                     continue

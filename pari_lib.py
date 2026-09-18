@@ -180,6 +180,12 @@ def serve_point_prob(stats, tour, server, prem_odds=None, games_served=None):
 @_lru(maxsize=None)
 def _set_prob(a, b, srv, h1, h2):
     """P(1-й выиграет сет) при счёте a-b, подача srv (1/2). h1/h2 — P(холда)."""
+    # 18.09: защита от кривых счетов в ленте (9-4, 8-2, 7-3 — бывают).
+    # Без неё рекурсия уходит в бесконечность (RecursionError в paper auto).
+    if a > 7 or b > 7:
+        return 1.0 if a > b else 0.0
+    if (a == 7 and b not in (5, 6)) or (b == 7 and a not in (5, 6)):
+        return 1.0 if a > b else 0.0
     if (a == 6 and b <= 4) or (a == 7):
         return 1.0
     if (b == 6 and a <= 4) or (b == 7):

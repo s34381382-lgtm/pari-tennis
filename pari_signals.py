@@ -35,6 +35,14 @@ from pari_patterns import is_women, sex_weight
 PHONE = "localhost:45375"
 ADB_PORT_FILE = "/tmp/adb_port.txt"
 EDGE_MIN = 0.12
+# 18.09: пороги по контурам (медиана маржи LAB 7.9% vs MAIN 6.4% —
+# единый 12% для LAB не покрывает маржу+дисперсию, бумага 15.09 в минусе).
+# LAB выше, MAIN базовый.
+EDGE_MIN_BY_CIRCUIT = {"LAB": 0.16, "MAIN": 0.12, "ASYM": 0.12}
+
+
+def edge_min_for(tour):
+    return EDGE_MIN_BY_CIRCUIT.get(tour_circuit(tour), EDGE_MIN)
 
 
 def adb_port():
@@ -180,7 +188,7 @@ def check_match(eid, snaps, state):
                     continue
                 p = serve_point_prob(m.get("stats"), m.get("tour"), side)
                 v = o.get("v")
-                if v and p - 1 / v > EDGE_MIN:
+                if v and p - 1 / v > edge_min_for(m.get("tour")):
                     key = ("point", gno, mm.group(2), round(v, 2))
                     if st.get("point") != key:
                         st["point"] = key
@@ -238,8 +246,9 @@ def check_match(eid, snaps, state):
                     o2 = o.get("v")
             if h1 and h2 and o1 and o2:
                 fair1 = match_fair(tuple(sw), (a, b), int(srv), h1, h2)
+                _em = edge_min_for(m.get("tour"))
                 for side, fo, bo in (("p1", fair1, o1), ("p2", 1 - fair1, o2)):
-                    if fo - 1 / bo > EDGE_MIN:
+                    if fo - 1 / bo > _em:
                         key = ("edge", side, round(bo, 2))
                         if st.get("edge") != key:
                             st["edge"] = key
@@ -295,7 +304,8 @@ def check_match(eid, snaps, state):
                     elif want_o in mk and vo is None:
                         vo = o.get("v")
                 fired = False
-                if vs and p - 1 / vs > EDGE_MIN:
+                _em = edge_min_for(m.get("tour"))
+                if vs and p - 1 / vs > _em:
                     gk = ("game", side, key, round(vs, 2))
                     if st.get("game") != gk:
                         st["game"] = gk
@@ -303,7 +313,7 @@ def check_match(eid, snaps, state):
                         sigs.append(f"ГЕЙМ {nm}: {who} держит с {sp}-{rp} "
                                     f"p={p:.0%} vs кэф {vs} (+{p - 1/vs:.0%})")
                         fired = True
-                if not fired and vo and (1 - p) - 1 / vo > EDGE_MIN:
+                if not fired and vo and (1 - p) - 1 / vo > _em:
                     gk = ("game", "anti-" + side, key, round(vo, 2))
                     if st.get("game") != gk:
                         st["game"] = gk
