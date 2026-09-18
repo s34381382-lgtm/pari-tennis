@@ -207,8 +207,13 @@ def build_timelines(paths):
                 eid = str(m.get("eid"))
                 live_now.add(eid)
                 t = get(eid)
+                # 18.09: тур/имена обновляем ВСЕГДА, если есть (было только
+                # при p1 — в ленте p1 пуст в 75% снапшотов, 84% TL без тура,
+                # вся разбивка по контурам врала).
+                if m.get("tour"):
+                    t["tour"] = m.get("tour")
                 if m.get("p1"):
-                    t["p1"], t["p2"], t["tour"] = m["p1"], m.get("p2"), m.get("tour")
+                    t["p1"], t["p2"] = m["p1"], m.get("p2")
                 last_seen[eid] = (ts, m)
                 ss = m.get("set_scores") or []
                 game = m.get("game")

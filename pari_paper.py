@@ -34,7 +34,7 @@ from pari_lib import ALLOWED_HORIZONS, CIRCUIT_STAKE, tour_circuit
 from pari_lib import game_fair as _gf
 from pari_lib import match_fair as _mf
 from pari_lib import serve_point_prob
-from pari_patterns import build_timelines
+from pari_patterns import build_timelines, is_women
 
 DATA = os.environ.get("PARI_DATA", "/public")
 PAPER = os.path.join(DATA, "paper.jsonl")
@@ -510,9 +510,9 @@ def cmd_auto(args):
     save_signals(sigs)
     print(f"сверено M: {m_settled}")
     # D: подающий на сет -> брейк принимающего (рейтовый, без геймовых кэфов).
-    # Замер 14-15.09: 55/117 (47%), на LAB 37/56 (66%) — LAB-сигнал.
-    # Ставка против подающего: исход гейма из TL (game_winner_after-логика
-    # через смену счёта уже в build_timelines).
+    # Замер 14-15.09, 115 геймов: 54/115 (47%). Разрез по полу: Ж 32/57 (56%),
+    # М 22/58 (38%). Женщины на подаче на сет сыплются — D это Ж-сигнал.
+    # 18.09: fair по полу (было единый 0.47/LAB 0.66 по кривому TL без туров).
     d_added = d_settled = 0
     for eid, t in TL.items():
         if any(s["eid"] == str(eid) and s["trigger"] == "D" for s in sigs):
@@ -539,7 +539,7 @@ def cmd_auto(args):
                              "trigger": "D",
                              "market": "брейк принимающего при подаче на сет",
                              "side": fade, "odds": 0,
-                             "fair": 0.47 if circ != "LAB" else 0.66,
+                             "fair": 0.56 if is_women(t.get("tour")) else 0.38,
                              "stake": CIRCUIT_STAKE.get(circ, 0.5),
                              "status": "win" if hit else "lose",
                              "profit": 0.0,

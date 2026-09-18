@@ -119,6 +119,25 @@ class TestParserAlarm(unittest.TestCase):
         self.assertIsNone(out.get("parser_broken"))
 
 
+class TestTimelines(unittest.TestCase):
+    def test_tour_kept_without_p1(self):
+        # Баг 18.09: тур обновлялся только при p1 — в ленте p1 пуст в 75%
+        # снапшотов, 84% TL оставались без тура, разбивка по контурам врала.
+        import tempfile
+        from pari_patterns import build_timelines
+        with tempfile.NamedTemporaryFile("w", suffix=".jsonl",
+                                         delete=False, encoding="utf-8") as f:
+            f.write('{"ts": 1, "matches": [{"eid": "1", "tour": "WTA x", '
+                    '"p1": "", "p2": "", "set_scores": [["0", "0"]], '
+                    '"game": ["00", "00"], "serve": "1"}]}\n')
+            path = f.name
+        try:
+            TL = build_timelines([path])
+            self.assertEqual(TL["1"]["tour"], "WTA x")
+        finally:
+            os.unlink(path)
+
+
 class TestPaperAuto(unittest.TestCase):
     def test_cmd_auto_accepts_file_list(self):
         # Баг 18.09: main() передаёт список файлов, cmd_auto ждал --files
